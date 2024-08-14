@@ -1427,6 +1427,9 @@ static void MX_GPIO_Init(void)
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   // SET BEEPER_Pin to high
   HAL_GPIO_WritePin(BEEPER_GPIO_Port, BEEPER_Pin, GPIO_PIN_SET);
+  // enable PWR_12V_EN_Pin
+  HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_SET);
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 /* USER CODE BEGIN 4 */
