@@ -43,7 +43,7 @@
 #define TCA9535_INPUT_PORT0_REG 0x00 // 输入端口0的寄存器地址
 #define TCA9535_CONFIG_REG 0x06
 
-#define CAN_RxExtId 0x1800D8D0
+#define CAN_RxExtId 0x17532F75
 // #define CAN_TxExtId 0x1800D0D8
 
 #define false 0
@@ -593,25 +593,29 @@ static int mcu_common_uart_data_unpack(uint8_t data)
 
 void open_door(uint8_t door)
 {
-  if( cur_input |= (1 << door*2) ) {
+  if (cur_input |= (1 << door * 2))
+  {
     printf("Door %d is already opened !\r\n", door);
     return;
-  } else {
+  }
+  else
+  {
     printf("Open Door %d !\r\n", door);
     motor_pwm[door].dir = 1;
     motor_pwm[door].pwm = 50;
   }
-
 }
-
 
 void close_door(uint8_t door)
 {
   printf("Close Door %d !\r\n", door);
-  if (cur_input &= (1 << door*2) ) {
+  if (cur_input &= (1 << door * 2))
+  {
     printf("Door %d is already closed !\r\n", door);
     return;
-  } else {
+  }
+  else
+  {
     motor_pwm[door].dir = 0;
     motor_pwm[door].pwm = 50;
   }
@@ -622,7 +626,7 @@ unsigned char get_door_state(void)
   unsigned char door_state = 0;
   for (int i = 0; i < 8; i++)
   {
-    if (cur_input & (1 << i*2))
+    if (cur_input & (1 << i * 2))
     {
       printf("Door %d is opened !\r\n", i);
       door_state |= (1 << i);
@@ -647,7 +651,6 @@ void data_handle(unsigned short offset)
 
   unsigned char cmd_ack[6] = {0xA0, 0x04, 0x00, 0xA0, 0x10, 0x00};
   unsigned char cmd_status[12] = {0xA0, 0x0A, 0x00, 0xA3, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x00};
-
 
   switch (cmd)
   {
@@ -700,24 +703,24 @@ void data_handle(unsigned short offset)
   case CMD_GET_DOOR_STATE: //  GET STATE
     printf("Get Door State !\r\n");
 
-  ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
-  ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
-  ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
-  ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
-  ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
+    ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
+    ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
+    ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
+    ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
+    ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
 
     // 门状态
     cmd_status[4] = get_door_state();
     // 电量  ADC_Values[0]
-    cmd_status[5] = 0x64;   // 100%
+    cmd_status[5] = 0x64; // 100%
     // 电流  ADC_Values[1]
-    cmd_status[6] = 0x22;   // 100%
+    cmd_status[6] = 0x22; // 100%
     // 12V电流  ADC_Values[2]
-    cmd_status[7] = 0x22;   // 100%
+    cmd_status[7] = 0x22; // 100%
     // VM电流  ADC_Values[3]
-    cmd_status[8] = 0x22;   // 100%
+    cmd_status[8] = 0x22; // 100%
     // 充电电流  ADC_Values[4]
-    cmd_status[9] = 0x22;   // 100%
+    cmd_status[9] = 0x22; // 100%
     // 故障码
     cmd_status[10] = 0x00;
     // 校验和
@@ -843,7 +846,7 @@ void can_process()
 {
   printf("Receive CAN Succeed !\r\n");
   unsigned char data = RxBuf[1];
-	uint16_t input;
+  uint16_t input;
   switch (RxBuf[0])
   {
   case 0xA0: // OPEN DOOR
@@ -910,15 +913,15 @@ void can_process()
     TxBuf[1] = get_door_state();
     TxBuf[2] = ADC_Values[0];
     // 电量  ADC_Values[0]
-    TxBuf[2] = 0x64;   // 100%
+    TxBuf[2] = 0x64; // 100%
     // 电流  ADC_Values[1]
-    TxBuf[3] = 0x22;   // 100%
+    TxBuf[3] = 0x22; // 100%
     // 12V电流  ADC_Values[2]
-    TxBuf[4] = 0x22;   // 100%
+    TxBuf[4] = 0x22; // 100%
     // VM电流  ADC_Values[3]
-    TxBuf[5] = 0x22;   // 100%
+    TxBuf[5] = 0x22; // 100%
     // 充电电流  ADC_Values[4]
-    TxBuf[6] = 0x22;   // 100%
+    TxBuf[6] = 0x22; // 100%
     // 故障码
     TxBuf[7] = 0x00;
 
@@ -961,7 +964,6 @@ void can_process()
     // else
     //   printf("Send completed !\r\n");
 
-
     break;
   case 0xAC: // query the current and voltage of the motor
     // send the adc data to CAN
@@ -975,7 +977,6 @@ void can_process()
     //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
     // else
     //   printf("Send completed !\r\n");
-
 
     break;
   case 0xAD: // query the current and voltage of the system
@@ -1015,9 +1016,7 @@ void can_process()
   // 清空接收、发送数组，保留Rxbuf内容
   memset(RxData, 0, sizeof(RxData));
   memset(TxBuf, 0, sizeof(TxBuf));
-
 }
-
 
 /* USER CODE END 0 */
 
@@ -1758,6 +1757,8 @@ uint16_t ReadTCA9535Inputs(void)
   return inputState;
 }
 
+static int time1s_count = 0;
+
 void timer1s(void)
 {
   uint16_t input = ReadTCA9535Inputs();
@@ -1785,24 +1786,31 @@ void timer1s(void)
     bSendTCA = 1;
   }
 
-  // 读取ADC的值
-  ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
-  ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
-  ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
-  ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
-  ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
+  time1s_count++;
 
-  bSendAdc = 1;
+  if (time1s_count == 10)
+  {
+    // 读取ADC的值
+    ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
+    ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
+    ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
+    ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
+    ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
+
+    bSendAdc = 0;
+    time1s_count = 0;
+  }
 
   // 切断12V 电压
-  if (bPowerOff == 1) {
-    bPowerOff_count --;
-    if (bPowerOff_count == 0) {
+  if (bPowerOff == 1)
+  {
+    bPowerOff_count--;
+    if (bPowerOff_count == 0)
+    {
       HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_RESET);
       bPowerOff = 0;
     }
   }
-
 }
 
 int send_cmd(uint8_t *cmd, uint8_t len)
@@ -1828,7 +1836,6 @@ int fgetc(FILE *f)
   HAL_UART_Receive(&huart1, &ch, 1, 0xffff);
   return ch;
 }
-
 
 /*CAN接收中断函数*/
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *CanNum)
