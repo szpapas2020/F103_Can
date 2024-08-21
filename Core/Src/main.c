@@ -831,6 +831,194 @@ void rs485_receive_input(unsigned char value)
 
 // ==============================END OF RS485 =========================================
 
+// ============================== CAN =========================================
+/*****************************************************************************
+函数名称 : can_process
+功能描述 : 收数据处理
+输入参数 : value:串口收到字节数据
+返回参数 : 无
+使用说明 : 在MCU串口接收函数中调用该函数,并将接收到的数据作为参数传入
+*****************************************************************************/
+void can_process()
+{
+  printf("Receive CAN Succeed !\r\n");
+  unsigned char data = RxBuf[1];
+	uint16_t input;
+  switch (RxBuf[0])
+  {
+  case 0xA0: // OPEN DOOR
+    printf("Open Door !\r\n");
+
+    // 从data最低位开始，如果这位的数值是1，就打开对应的门
+    for (int i = 0; i < 8; i++)
+    {
+      if ((data >> i) & 0x01)
+      {
+        printf("Open Door %d !\r\n", i);
+        open_door(i);
+      }
+    }
+
+    // Send ACK
+    TxBuf[0] = 0xA0;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    // 清空接收、发送数组，保留Rxbuf内容
+    memset(TxBuf, 0, sizeof(TxBuf));
+    break;
+
+  case CMD_CLOSE_DOOR:
+    printf("Close Door !\r\n");
+    // 从data最低位开始，如果这位的数值是1，就打开对应的门
+    for (int i = 0; i < 8; i++)
+    {
+      if ((data >> i) & 0x01)
+      {
+        printf("Close Door %d !\r\n", i);
+        close_door(i);
+      }
+    }
+
+    // Send ACK
+    TxBuf[0] = 0xA1;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  case CMD_ALARM:
+    printf("Alarm !\r\n");
+
+    TxBuf[0] = 0xA2;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  case CMD_GET_DOOR_STATE:
+    printf("Get Door State !\r\n");
+
+    ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
+    ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
+    ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
+    ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
+    ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
+
+    // 门状态
+    TxBuf[0] = 0xA3;
+    TxBuf[1] = get_door_state();
+    TxBuf[2] = ADC_Values[0];
+    // 电量  ADC_Values[0]
+    TxBuf[2] = 0x64;   // 100%
+    // 电流  ADC_Values[1]
+    TxBuf[3] = 0x22;   // 100%
+    // 12V电流  ADC_Values[2]
+    TxBuf[4] = 0x22;   // 100%
+    // VM电流  ADC_Values[3]
+    TxBuf[5] = 0x22;   // 100%
+    // 充电电流  ADC_Values[4]
+    TxBuf[6] = 0x22;   // 100%
+    // 故障码
+    TxBuf[7] = 0x00;
+
+    Tx_Flag = CAN_Send_Msg(TxBuf, 8);
+
+    break;
+
+  case CMD_TURN_ON:
+    printf("Turn On !\r\n");
+    // enable PWR_12V_EN_Pin
+    HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_SET);
+    // Send ACK
+    TxBuf[0] = 0xA4;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  case CMD_TURN_OFF:
+    printf("Turn Off !\r\n");
+    bPowerOff = 1;
+    bPowerOff_count = 12;
+    // Send ACK
+    TxBuf[0] = 0xA5;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  // 我的自定义code
+  case 0xAB: // query the position of the motor
+    input = ReadTCA9535Inputs();
+    TxBuf[0] = 0xAB;
+    TxBuf[1] = input & 0xFF;
+    TxBuf[2] = input >> 8;
+
+    Tx_Flag = CAN_Send_Msg(TxBuf, 3); // 发送数据，根据返回值判定发送是否异常
+    // if (Tx_Flag)
+    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
+    // else
+    //   printf("Send completed !\r\n");
+
+
+    break;
+  case 0xAC: // query the current and voltage of the motor
+    // send the adc data to CAN
+    TxBuf[0] = 0xAC;
+    TxBuf[1] = ADC_Values[0] & 0xFF;
+    TxBuf[2] = ADC_Values[0] >> 8;
+    TxBuf[3] = ADC_Values[1] & 0xFF;
+    TxBuf[4] = ADC_Values[1] >> 8;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
+    // if (Tx_Flag)
+    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
+    // else
+    //   printf("Send completed !\r\n");
+
+
+    break;
+  case 0xAD: // query the current and voltage of the system
+    TxBuf[0] = 0xAD;
+    TxBuf[1] = ADC_Values[2] & 0xFF;
+    TxBuf[2] = ADC_Values[2] >> 8;
+    TxBuf[3] = ADC_Values[3] & 0xFF;
+    TxBuf[4] = ADC_Values[3] >> 8;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
+    // if (Tx_Flag)
+    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
+    // else
+    //   printf("Send completed !\r\n");
+
+    break;
+
+  case 0xBB: // set the motor pwm BB 00 dir pwm
+    // mt_id = RxBuf[1];
+    // dir = RxBuf[2];
+    // pwm = RxBuf[3];
+
+    if (RxBuf[1] > 7 || RxBuf[2] > 1 || RxBuf[3] > 100)
+    {
+      printf("Invalid data !\r\n");
+      break;
+    }
+    else
+    {
+      motor_pwm[RxBuf[1]].dir = RxBuf[2];
+      motor_pwm[RxBuf[1]].pwm = RxBuf[3];
+    }
+    break;
+  default:
+    break;
+  }
+
+  // 清空接收、发送数组，保留Rxbuf内容
+  memset(RxData, 0, sizeof(RxData));
+  memset(TxBuf, 0, sizeof(TxBuf));
+
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -887,8 +1075,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint16_t input;
-    uint8_t mt_id, pwm, dir;
 
     // timer1s
     if (bTimer1S)
@@ -908,85 +1094,7 @@ int main(void)
     // CAN Receive
     if (Rx_Flag) // 如果接收标志位被置1，则开展逻辑判断
     {
-      printf("Receive CAN Succeed !\r\n");
-      switch (RxBuf[0])
-      {
-      case 0xAA: // query the status of the charge status
-
-        break;
-      case 0xAB: // query the position of the motor
-        input = ReadTCA9535Inputs();
-        TxBuf[0] = 0xAB;
-        TxBuf[1] = input & 0xFF;
-        TxBuf[2] = input >> 8;
-
-        Tx_Flag = CAN_Send_Msg(TxBuf, 3); // 发送数据，根据返回值判定发送是否异常
-        // if (Tx_Flag)
-        //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-        // else
-        //   printf("Send completed !\r\n");
-
-        // 清空接收、发送数组，保留Rxbuf内容
-        memset(TxBuf, 0, sizeof(TxBuf));
-
-        break;
-      case 0xAC: // query the current and voltage of the motor
-        // send the adc data to CAN
-        TxBuf[0] = 0xAC;
-        TxBuf[1] = ADC_Values[0] & 0xFF;
-        TxBuf[2] = ADC_Values[0] >> 8;
-        TxBuf[3] = ADC_Values[1] & 0xFF;
-        TxBuf[4] = ADC_Values[1] >> 8;
-        Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
-        // if (Tx_Flag)
-        //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-        // else
-        //   printf("Send completed !\r\n");
-
-        // 清空接收、发送数组，保留Rxbuf内容
-        memset(TxBuf, 0, sizeof(TxBuf));
-
-        break;
-      case 0xAD: // query the current and voltage of the system
-        TxBuf[0] = 0xAD;
-        TxBuf[1] = ADC_Values[2] & 0xFF;
-        TxBuf[2] = ADC_Values[2] >> 8;
-        TxBuf[3] = ADC_Values[3] & 0xFF;
-        TxBuf[4] = ADC_Values[3] >> 8;
-        Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
-        // if (Tx_Flag)
-        //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-        // else
-        //   printf("Send completed !\r\n");
-        // 清空接收、发送数组，保留Rxbuf内容
-        memset(TxBuf, 0, sizeof(TxBuf));
-
-        break;
-
-      case 0xBB: // set the motor pwm BB 00 dir pwm
-        mt_id = RxBuf[1];
-        dir = RxBuf[2];
-        pwm = RxBuf[3];
-
-        if (mt_id > 7 || dir > 1 || pwm > 100)
-        {
-          printf("Invalid data !\r\n");
-          break;
-        }
-        else
-        {
-          motor_pwm[mt_id].dir = dir;
-          motor_pwm[mt_id].pwm = pwm;
-        }
-        break;
-      default:
-        break;
-      }
-
-      // 清空接收、发送数组，保留Rxbuf内容
-      memset(RxData, 0, sizeof(RxData));
-      memset(TxBuf, 0, sizeof(TxBuf));
-
+      can_process();
       Rx_Flag = 0; // 标志位置0，等待下一次中断
     }
 
@@ -1429,6 +1537,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(BEEPER_GPIO_Port, BEEPER_Pin, GPIO_PIN_SET);
   // enable PWR_12V_EN_Pin
   HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_SET);
+  // PWR_5V_EN_Pin
+  HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_SET);
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -1682,7 +1792,7 @@ void timer1s(void)
   ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
   ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
 
-  // bSendAdc = 1;
+  bSendAdc = 1;
 
   // 切断12V 电压
   if (bPowerOff == 1) {
