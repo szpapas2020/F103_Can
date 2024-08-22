@@ -30,6 +30,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "leaf_ota.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,24 +41,14 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TCA9535_ADDRESS 0x20         // TCA9535的I2C地址
-#define TCA9535_INPUT_PORT0_REG 0x00 // 输入端口0的寄存器地址
-#define TCA9535_CONFIG_REG 0x06
+#define TCA9535_ADDRESS         (0x20)         // TCA9535的I2C地址
+#define TCA9535_INPUT_PORT0_REG (0x00) // 输入端口0的寄存器地址
+#define TCA9535_CONFIG_REG      (0x06)
 
 #define CAN_RxExtId 0x17532F75
-// #define CAN_TxExtId 0x1800D0D8
 
 #define false 0
 #define true 1
-
-//=============================================================================
-// 帧的字节顺序
-//=============================================================================
-#define HEAD 0
-#define LENGTH 1
-#define ADDR 2
-#define CMD 3
-#define DATA_START 4
 
 //=============================================================================
 // 数据帧类型
@@ -69,38 +61,18 @@
 #define CMD_TURN_ON 0xB1
 #define CMD_TURN_OFF 0xB2
 
-//=============================================================================
-#define VERSION 0x00         // 协议版本号
-#define FIRM_UPDATA_SIZE 256 // 升级包大小
-//=============================================================================
+#define CMD_OTA_VERSION 0xC0
+#define CMD_OTA_REQUEST 0xC1
+#define CMD_OTA_DATA 0xC2
+#define CMD_OTA_END 0xC3
+#define CMD_OTA_RESET 0xC4
 
-#define UART_QUEUE_LMT 1024    // 数据接收队列大小,如MCU的RAM不够,可缩小
-#define UART_RECV_BUF_LMT 1024 // 固件升级缓冲区,需大缓存,必须大于260
-#define UART_SEND_BUF_LMT 512  // 根据用户DP数据大小量定,必须大于32
-
-typedef enum
-{
-  MCU_UART_REV_STATE_FOUND_NULL,
-  MCU_UART_REV_STATE_FOUND_HEAD, // 1byte
-  MCU_UART_REV_STATE_FOUND_LEN,  // 1byte
-  MCU_UART_REV_STATE_FOUND_ADD,  // 1byte
-  MCU_UART_REV_STATE_FOUND_CMD,  // 1byte
-  MCU_UART_REV_STATE_FOUND_DATA, // nbyte
-  MCU_UART_REV_STATE_FOUND_CRC,
-  MCU_UART_REV_STATE_UNKOWN,
-} mcu_uart_rev_state_type_t;
-
-unsigned char volatile queue_buf[UART_QUEUE_LMT]; // 队列缓存  1024
-unsigned char uart_rx_buf[UART_RECV_BUF_LMT];     // 接收缓存  1024
-unsigned char uart_tx_buf[UART_SEND_BUF_LMT];     // 发送缓存  512
-
-unsigned char *queue_in;
-unsigned char *queue_out;
-
-static volatile mcu_uart_rev_state_type_t current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_NULL;
-static uint8_t uart_rx_buf_temp[1] = {0};
-static uint16_t uart_data_len = 0;
-static volatile uint16_t UART_RX_Count = 0;
+static uint8_t version[2] = {0x0, 0x1};
+static uint16_t ota_file_size = 0;
+static uint8_t ota_file_crc = 0;
+static uint16_t firmwareSize = 0;
+static uint16_t firmwareBatch = 0;
+uint8_t firmwareBuffer[1024];
 
 int bPowerOff = 0;
 int bPowerOff_count = 12;
@@ -241,263 +213,6 @@ int send_cmd(uint8_t *cmd, uint8_t len);
 /* USER CODE BEGIN 0 */
 
 // ============================== RS485 =========================================
-
-/*****************************************************************************
-函数名称 : get_queue_total_data
-功能描述 : 读取队列内数据
-输入参数 : 无
-返回参数 : 无
-*****************************************************************************/
-unsigned char get_queue_total_data(void)
-{
-  if (queue_in != queue_out)
-    return 1;
-  else
-    return 0;
-}
-
-/*****************************************************************************
-函数名称 : Queue_Read_Byte
-功能描述 : 读取队列1字节数据
-输入参数 : 无
-返回参数 : 无
-*****************************************************************************/
-unsigned char Queue_Read_Byte(void)
-{
-  unsigned char value;
-
-  if (queue_out != queue_in)
-  {
-    // 有数据
-    if (queue_out >= (unsigned char *)(queue_buf + sizeof(queue_buf)))
-    {
-      // 数据已经到末尾
-      queue_out = (unsigned char *)(queue_buf);
-    }
-
-    value = *queue_out++;
-  }
-
-  return value;
-}
-
-/*****************************************************************************
-函数名称 : hex_to_bcd
-功能描述 : hex转bcd
-输入参数 : Value_H:高字节/Value_L:低字节
-返回参数 : bcd_value:转换完成后数据
-*****************************************************************************/
-unsigned char hex_to_bcd(unsigned char Value_H, unsigned char Value_L)
-{
-  unsigned char bcd_value;
-
-  if ((Value_H >= '0') && (Value_H <= '9'))
-    Value_H -= '0';
-  else if ((Value_H >= 'A') && (Value_H <= 'F'))
-    Value_H = Value_H - 'A' + 10;
-  else if ((Value_H >= 'a') && (Value_H <= 'f'))
-    Value_H = Value_H - 'a' + 10;
-
-  bcd_value = Value_H & 0x0f;
-
-  bcd_value <<= 4;
-  if ((Value_L >= '0') && (Value_L <= '9'))
-    Value_L -= '0';
-  else if ((Value_L >= 'A') && (Value_L <= 'F'))
-    Value_L = Value_L - 'a' + 10;
-  else if ((Value_L >= 'a') && (Value_L <= 'f'))
-    Value_L = Value_L - 'a' + 10;
-
-  bcd_value |= Value_L & 0x0f;
-
-  return bcd_value;
-}
-
-/*****************************************************************************
-函数名称 : hexstr2byte
-功能描述 : hex字符串转换为byte
-输入参数 : 字符串
-返回参数 : 转换后的数据放在bufout中，长度为原来的一半
-*****************************************************************************/
-int hexstr2byte(const char *buf, int len, char *bufout)
-{
-  int ret = -1;
-  int i = 0;
-  uint8_t low;
-  uint8_t high;
-
-  if (NULL == buf || len <= 0 || NULL == bufout)
-  {
-    return ret;
-  }
-
-  ret = 0;
-  for (i = 0; i < len; i = i + 2)
-  {
-    if (((buf[i]) >= '0') && (buf[i] <= '9'))
-    {
-      high = (uint8_t)(buf[i] - '0');
-    }
-    else if ((buf[i] >= 'A') && (buf[i] <= 'F'))
-    {
-      high = (uint8_t)(buf[i] - 'A') + 10;
-    }
-    else if ((buf[i] >= 'a') && (buf[i] <= 'f'))
-    {
-      high = (uint8_t)(buf[i] - 'a') + 10;
-    }
-    else
-    {
-      ret = -1;
-      break;
-    }
-
-    if (((buf[i + 1]) >= '0') && (buf[i + 1] <= '9'))
-    {
-      low = (uint8_t)(buf[i + 1] - '0');
-    }
-    else if ((buf[i + 1] >= 'A') && (buf[i + 1] <= 'F'))
-    {
-      low = (uint8_t)(buf[i + 1] - 'A') + 10;
-    }
-    else if ((buf[i + 1] >= 'a') && (buf[i + 1] <= 'f'))
-    {
-      low = (uint8_t)(buf[i + 1] - 'a') + 10;
-    }
-    else
-    {
-      ret = -1;
-      break;
-    }
-
-    bufout[i / 2] = (char)((high << 4) | (low & 0x0F));
-  }
-  return ret;
-}
-
-// make a byte to 2 ascii hex
-int byte2hexstr(uint8_t *bufin, int len, char *bufout)
-{
-  int i = 0;
-  uint8_t tmp_l = 0x0;
-  uint8_t tmp_h = 0;
-  if ((NULL == bufin) || (len <= 0) || (NULL == bufout))
-  {
-    return -1;
-  }
-  for (i = 0; i < len; i++)
-  {
-    tmp_h = (bufin[i] >> 4) & 0X0F;
-    tmp_l = bufin[i] & 0x0F;
-    bufout[2 * i] = (tmp_h > 9) ? (tmp_h - 10 + 'a') : (tmp_h + '0');
-    bufout[2 * i + 1] = (tmp_l > 9) ? (tmp_l - 10 + 'a') : (tmp_l + '0');
-  }
-  bufout[2 * len] = '\0';
-
-  return 0;
-}
-
-/*****************************************************************************
-函数名称 : my_strlen
-功能描述 : 求字符串长度
-输入参数 : src:源地址
-返回参数 : len:数据长度
-*****************************************************************************/
-unsigned long my_strlen(unsigned char *str)
-{
-  unsigned long len = 0;
-  if (str == NULL)
-  {
-    return 0;
-  }
-
-  for (len = 0; *str++ != '\0';)
-  {
-    len++;
-  }
-
-  return len;
-}
-/*****************************************************************************
-函数名称 : my_memset
-功能描述 : 把src所指内存区域的前count个字节设置成字符c
-输入参数 : src:源地址
-           ch:设置字符
-           count:设置数据长度
-返回参数 : src:数据处理完后的源地址
-*****************************************************************************/
-void *my_memset(void *src, unsigned char ch, unsigned short count)
-{
-  unsigned char *tmp = (unsigned char *)src;
-
-  if (src == NULL)
-  {
-    return NULL;
-  }
-
-  while (count--)
-  {
-    *tmp++ = ch;
-  }
-
-  return src;
-}
-/*****************************************************************************
-函数名称 : mymemcpy
-功能描述 : 内存拷贝
-输入参数 : dest:目标地址
-           src:源地址
-           count:数据拷贝数量
-返回参数 : src:数据处理完后的源地址
-*****************************************************************************/
-void *my_memcpy(void *dest, const void *src, unsigned short count)
-{
-  unsigned char *pdest = (unsigned char *)dest;
-  const unsigned char *psrc = (const unsigned char *)src;
-  unsigned short i;
-
-  if (dest == NULL || src == NULL)
-  {
-    return NULL;
-  }
-
-  if ((pdest <= psrc) || (pdest > psrc + count))
-  {
-    for (i = 0; i < count; i++)
-    {
-      pdest[i] = psrc[i];
-    }
-  }
-  else
-  {
-    for (i = count; i > 0; i--)
-    {
-      pdest[i - 1] = psrc[i - 1];
-    }
-  }
-
-  return dest;
-}
-/*****************************************************************************
-函数名称 : memcmp
-功能描述 : 内存比较
-输入参数 : buffer1:内存1
-           buffer2:内存2
-            count:比较长度
-返回参数 : 大小比较值，0:buffer1=buffer2; -1:buffer1<buffer2; 1:buffer1>buffer2
-*****************************************************************************/
-int my_memcmp(const void *buffer1, const void *buffer2, int count)
-{
-  if (!count)
-    return (0);
-  while (--count && *(char *)buffer1 == *(char *)buffer2)
-  {
-    buffer1 = (char *)buffer1 + 1;
-    buffer2 = (char *)buffer2 + 1;
-  }
-  return (*((unsigned char *)buffer1) - *((unsigned char *)buffer2));
-}
-
 /*****************************************************************************
 函数名称 : CheckSum
 功能描述 : 计算Checksum
@@ -517,78 +232,32 @@ unsigned char CheckSum(unsigned char *uBuff, unsigned char uBuffLen)
   return uSum;
 }
 
-/*
- *@brief Function for receive uart data.
- *@param
- *
- *@note
- *
- * 数据解析过程
- *
- *
- * */
-static int mcu_common_uart_data_unpack(uint8_t data)
+
+unsigned char CheckSumFlash(uint32_t start_addr, uint16_t file_size)
 {
-  // printf("%02x ", data);
+  unsigned char i, uSum = 0;
+  uint16_t batch = 0;
 
-  int ret = false;
-  uart_rx_buf_temp[0] = data;
-
-  if (uart_rx_buf_temp[0] == 0xA0 && current_uart_rev_state_type == MCU_UART_REV_STATE_FOUND_NULL)
+  for (batch = 0; batch < file_size / 1024; batch++)
   {
-    my_memset(uart_rx_buf, 0, sizeof(uart_rx_buf));
-    my_memcpy(uart_rx_buf, uart_rx_buf_temp, 1);
-    my_memset(uart_rx_buf_temp, 0, 1);
-    UART_RX_Count = 1;
-    current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_HEAD;
-    uart_data_len = 0;
-    return ret;
+    // Read 1024 bytes from flash
+    STMFLASH_Read((start_addr + batch * 1024), (uint32_t *) &firmwareBuffer[0], 256);
+    for (i = 0; i < 1024; i++)
+    {
+      uSum = uSum + firmwareBuffer[i];
+    }
   }
 
-  switch (current_uart_rev_state_type)
+  // read the remaining bytes
+  STMFLASH_Read((start_addr + batch * 1024), (uint32_t *) &firmwareBuffer[0], file_size % 1024);
+
+  for (i = 0; i < file_size % 1024; i++)
   {
-  case MCU_UART_REV_STATE_FOUND_NULL:
-    break;
-  case MCU_UART_REV_STATE_FOUND_HEAD:
-    uart_rx_buf[UART_RX_Count++] = data;
-    current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_LEN;
-    uart_data_len = data;
-    break;
-  case MCU_UART_REV_STATE_FOUND_LEN:
-    uart_rx_buf[UART_RX_Count++] = data;
-    uart_data_len--;
-    if (uart_data_len == 0)
-    {
-      current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_DATA;
-    }
-    break;
-  case MCU_UART_REV_STATE_FOUND_DATA:
-    uart_rx_buf[UART_RX_Count++] = data; // CRC
-    current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_CRC;
-    // check crc
-    if (uart_rx_buf[UART_RX_Count - 1] == CheckSum(uart_rx_buf, UART_RX_Count - 1))
-    {
-      printf("CRC Check OK !\r\n");
-      ret = true;
-    }
-    else
-    {
-      my_memset(uart_rx_buf_temp, 0, 1);
-      my_memset(uart_rx_buf, 0, sizeof(uart_rx_buf));
-      UART_RX_Count = 0;
-      current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_NULL;
-      uart_data_len = 0;
-    }
-    break;
-  default:
-    my_memset(uart_rx_buf_temp, 0, 1);
-    my_memset(uart_rx_buf, 0, sizeof(uart_rx_buf));
-    UART_RX_Count = 0;
-    current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_NULL;
-    uart_data_len = 0;
-    break;
-  };
-  return ret;
+    uSum = uSum + firmwareBuffer[i];
+  }
+
+  uSum = (~uSum) + 1;
+  return uSum;
 }
 
 void open_door(uint8_t door)
@@ -636,204 +305,6 @@ unsigned char get_door_state(void)
   return door_state;
 }
 
-/*****************************************************************************
-函数名称 : data_handle
-功能描述 : 数据帧处理
-输入参数 : offset:数据起始位
-返回参数 : 无
-*****************************************************************************/
-void data_handle(unsigned short offset)
-{
-
-  // unsigned char addr = uart_rx_buf[offset + ADDR];
-  unsigned char cmd = uart_rx_buf[offset + CMD];
-  unsigned char data = uart_rx_buf[offset + DATA_START];
-
-  unsigned char cmd_ack[6] = {0xA0, 0x04, 0x00, 0xA0, 0x10, 0x00};
-  unsigned char cmd_status[12] = {0xA0, 0x0A, 0x00, 0xA3, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x00};
-
-  switch (cmd)
-  {
-  case CMD_OPEN_DOOR: // OPEN DOOR
-    printf("Open Door !\r\n");
-
-    // 从data最低位开始，如果这位的数值是1，就打开对应的门
-    for (int i = 0; i < 8; i++)
-    {
-      if ((data >> i) & 0x01)
-      {
-        printf("Open Door %d !\r\n", i);
-        open_door(i);
-      }
-    }
-
-    // Send ACK
-    cmd_ack[CMD] = CMD_OPEN_DOOR;
-    cmd_ack[5] = CheckSum(cmd_ack, 5);
-    send_cmd(cmd_ack, sizeof(cmd_ack));
-
-    break;
-
-  case CMD_CLOSE_DOOR: //  CLOSE DOOR
-    printf("Close Door !\r\n");
-    // 从data最低位开始，如果这位的数值是1，就打开对应的门
-    for (int i = 0; i < 8; i++)
-    {
-      if ((data >> i) & 0x01)
-      {
-        printf("Close Door %d !\r\n", i);
-        close_door(i);
-      }
-    }
-
-    // Send ACK
-    cmd_ack[CMD] = CMD_CLOSE_DOOR;
-    cmd_ack[5] = CheckSum(cmd_ack, 5);
-    send_cmd(cmd_ack, sizeof(cmd_ack));
-    break;
-
-  case CMD_ALARM: // ALARM
-    printf("Alarm !\r\n");
-
-    cmd_ack[CMD] = CMD_ALARM;
-    cmd_ack[5] = CheckSum(cmd_ack, 5);
-    send_cmd(cmd_ack, sizeof(cmd_ack));
-    break;
-
-  case CMD_GET_DOOR_STATE: //  GET STATE
-    printf("Get Door State !\r\n");
-
-    ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
-    ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
-    ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
-    ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
-    ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
-
-    // 门状态
-    cmd_status[4] = get_door_state();
-    // 电量  ADC_Values[0]
-    cmd_status[5] = 0x64; // 100%
-    // 电流  ADC_Values[1]
-    cmd_status[6] = 0x22; // 100%
-    // 12V电流  ADC_Values[2]
-    cmd_status[7] = 0x22; // 100%
-    // VM电流  ADC_Values[3]
-    cmd_status[8] = 0x22; // 100%
-    // 充电电流  ADC_Values[4]
-    cmd_status[9] = 0x22; // 100%
-    // 故障码
-    cmd_status[10] = 0x00;
-    // 校验和
-    cmd_status[11] = CheckSum(cmd_status, 11);
-    send_cmd(cmd_status, sizeof(cmd_status));
-    break;
-
-  case CMD_TURN_ON: //  TURN ON
-    printf("Turn On !\r\n");
-    // enable PWR_12V_EN_Pin
-    HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_SET);
-    // Send ACK
-    cmd_ack[CMD] = CMD_TURN_ON;
-    cmd_ack[5] = CheckSum(cmd_ack, 5);
-    send_cmd(cmd_ack, sizeof(cmd_ack));
-
-    break;
-
-  case CMD_TURN_OFF: //  TURN OFF
-    printf("Turn Off !\r\n");
-    bPowerOff = 1;
-    bPowerOff_count = 12;
-    // Send ACK
-    cmd_ack[CMD] = CMD_TURN_OFF;
-    cmd_ack[5] = CheckSum(cmd_ack, 5);
-    send_cmd(cmd_ack, sizeof(cmd_ack));
-    break;
-
-  default:
-    printf("Unknown CMD !\r\n");
-    break;
-  }
-}
-
-/*****************************************************************************
-函数名称  : UART_service
-功能描述  : bt串口处理服务
-输入参数 : 无
-返回参数 : 无
-使用说明 : 在MCU主函数while循环中调用该函数
-           新建一个任务，处理这个buffer中的数据。
-           TCP 接收进程，将收到的数据放在队列中。
-
-*****************************************************************************/
-void rs485_service(void)
-{
-  if (get_queue_total_data() > 0)
-  {
-    unsigned char uc = Queue_Read_Byte();
-
-    if (mcu_common_uart_data_unpack(uc))
-    {
-      data_handle(0);
-      // rx_value_len = UART_rx_buf[LENGTH_HIGH] * 0x100 + UART_rx_buf[LENGTH_LOW] + PROTOCOL_HEAD;
-
-      my_memset(uart_rx_buf_temp, 0, 1);
-      my_memset(uart_rx_buf, 0, sizeof(uart_rx_buf));
-
-      UART_RX_Count = 0;
-      current_uart_rev_state_type = MCU_UART_REV_STATE_FOUND_NULL;
-      uart_data_len = 0;
-    }
-  }
-}
-
-/*****************************************************************************
-函数名称 : rs485_protocol_init
-功能描述 : 协议串口初始化函数
-输入参数 : 无
-返回参数 : 无
-使用说明 : 必须在MCU初始化代码中调用该函数
-*****************************************************************************/
-void rs485_protocol_init(void)
-{
-  queue_in = (unsigned char *)queue_buf;
-  queue_out = (unsigned char *)queue_buf;
-}
-
-/*****************************************************************************
-函数名称 : rs485_receive_input
-功能描述 : 收数据处理
-输入参数 : value:串口收到字节数据
-返回参数 : 无
-使用说明 : 在MCU串口接收函数中调用该函数,并将接收到的数据作为参数传入
-*****************************************************************************/
-void rs485_receive_input(unsigned char value)
-{
-  // printf("%02x ", value);
-
-  if ((queue_in > queue_out) && ((queue_in - queue_out) >= sizeof(queue_buf)))
-  {
-    // 数据队列满
-    printf("RS485 queue buf is FULL \r\n");
-  }
-  else if ((queue_in < queue_out) && ((queue_out - queue_in) == 0))
-  {
-    // 数据队列满
-    printf("RS485 queue buf is FULL 2 \r\n");
-  }
-  else
-  {
-    // 队列不满
-    if (queue_in >= (unsigned char *)(queue_buf + sizeof(queue_buf)))
-    {
-      queue_in = (unsigned char *)(queue_buf);
-    }
-
-    *queue_in++ = value;
-  }
-}
-
-// ==============================END OF RS485 =========================================
-
 // ============================== CAN =========================================
 /*****************************************************************************
 函数名称 : can_process
@@ -846,7 +317,8 @@ void can_process()
 {
   printf("Receive CAN Succeed !\r\n");
   unsigned char data = RxBuf[1];
-  uint16_t input;
+  // uint16_t input;
+
   switch (RxBuf[0])
   {
   case 0xA0: // OPEN DOOR
@@ -902,6 +374,8 @@ void can_process()
   case CMD_GET_DOOR_STATE:
     printf("Get Door State !\r\n");
 
+    // ADC: 2176 2499 2460 2520 2510
+
     ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
     ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
     ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
@@ -951,64 +425,87 @@ void can_process()
 
     break;
 
-  // 我的自定义code
-  case 0xAB: // query the position of the motor
-    input = ReadTCA9535Inputs();
-    TxBuf[0] = 0xAB;
-    TxBuf[1] = input & 0xFF;
-    TxBuf[2] = input >> 8;
-
-    Tx_Flag = CAN_Send_Msg(TxBuf, 3); // 发送数据，根据返回值判定发送是否异常
-    // if (Tx_Flag)
-    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-    // else
-    //   printf("Send completed !\r\n");
-
-    break;
-  case 0xAC: // query the current and voltage of the motor
-    // send the adc data to CAN
-    TxBuf[0] = 0xAC;
-    TxBuf[1] = ADC_Values[0] & 0xFF;
-    TxBuf[2] = ADC_Values[0] >> 8;
-    TxBuf[3] = ADC_Values[1] & 0xFF;
-    TxBuf[4] = ADC_Values[1] >> 8;
-    Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
-    // if (Tx_Flag)
-    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-    // else
-    //   printf("Send completed !\r\n");
-
-    break;
-  case 0xAD: // query the current and voltage of the system
-    TxBuf[0] = 0xAD;
-    TxBuf[1] = ADC_Values[2] & 0xFF;
-    TxBuf[2] = ADC_Values[2] >> 8;
-    TxBuf[3] = ADC_Values[3] & 0xFF;
-    TxBuf[4] = ADC_Values[3] >> 8;
-    Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
-    // if (Tx_Flag)
-    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-    // else
-    //   printf("Send completed !\r\n");
-
+  // OTA proces
+  case CMD_OTA_VERSION:
+    printf("OTA Version !\r\n");
+    TxBuf[0] = CMD_OTA_VERSION;
+    TxBuf[1] = version[0];
+    TxBuf[2] = version[1];
+    Tx_Flag = CAN_Send_Msg(TxBuf, 3);
     break;
 
-  case 0xBB: // set the motor pwm BB 00 dir pwm
-    // mt_id = RxBuf[1];
-    // dir = RxBuf[2];
-    // pwm = RxBuf[3];
+  case CMD_OTA_REQUEST:
 
-    if (RxBuf[1] > 7 || RxBuf[2] > 1 || RxBuf[3] > 100)
+    ota_file_size = (RxBuf[1] << 8) | RxBuf[2];
+    ota_file_crc = RxBuf[3];
+
+    printf("OTA Request %d, %d !\r\n", ota_file_size, ota_file_crc);
+
+    TxBuf[0] = CMD_OTA_VERSION;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+    firmwareBatch = 0;
+    firmwareSize = 0;
+    break;
+
+  case CMD_OTA_DATA:
+    for (int i = 1; i < RxHeader.DLC; i++)
     {
-      printf("Invalid data !\r\n");
-      break;
+      firmwareBuffer[firmwareSize++] = RxData[i];
+    }
+
+    if (firmwareSize >= 1024)
+    {
+      //Write firmwareBuffer to flash
+      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 1024), (uint32_t *) &firmwareBuffer[0], 256);
+      printf("OTA Data Receive %d !\r\n", firmwareBatch++);
+
+      for (int i = 1024; i < firmwareSize; i++)
+      {
+        firmwareBuffer[i-1024] = firmwareBuffer[i];
+      }
+      firmwareSize -= 1024;
+    }
+
+    if (firmwareSize + 1024 * firmwareBatch >= ota_file_size)
+    {
+      //Write firmwareBuffer to flash
+      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 1024), (uint32_t *) &firmwareBuffer[0], firmwareSize/4);
+      printf("OTA Data Receive Finished!\r\n");
+      TxBuf[0] = CMD_OTA_DATA;
+      TxBuf[1] = 0x10;
+      Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+    }
+    break;
+
+  case CMD_OTA_END:
+    printf("OTA End !\r\n");
+
+    // check the CRC of the firmware
+    if (ota_file_crc == CheckSumFlash(APP_NEW_FW_START_ADR, ota_file_size))
+    {
+      printf("OTA CRC Check Succeed !\r\n");
+      // reset the system
+      TxBuf[0] = CMD_OTA_END;
+      TxBuf[1] = 0x10;
+      Tx_Flag = CAN_Send_Msg(TxBuf, 2);
     }
     else
     {
-      motor_pwm[RxBuf[1]].dir = RxBuf[2];
-      motor_pwm[RxBuf[1]].pwm = RxBuf[3];
+      printf("OTA CRC Check Failed !\r\n");
+      TxBuf[0] = CMD_OTA_END;
+      TxBuf[1] = 0x61;
+      Tx_Flag = CAN_Send_Msg(TxBuf, 2);
     }
     break;
+
+  case CMD_OTA_RESET:
+    printf("OTA Reset !\r\n");
+    TxBuf[0] = CMD_OTA_RESET;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+    break;
+
   default:
     break;
   }
@@ -1063,8 +560,6 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_Base_Start_IT(&htim4);
 
-  rs485_protocol_init();
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -1097,34 +592,6 @@ int main(void)
       Rx_Flag = 0; // 标志位置0，等待下一次中断
     }
 
-    // TCA9535
-    if (bSendTCA)
-    {
-      Send_TCA();
-      bSendTCA = 0;
-    }
-
-    // ADC
-    if (bSendAdc)
-    {
-      Send_ADC();
-      bSendAdc = 0;
-    }
-
-    // RS485_1
-    rs485_service();
-
-    // RS485_3
-    if (UART3_Rx_flg)
-    {
-      printf("RS485_3 Request!");
-
-      memset(buffer3, 0, 50);
-      sofar3 = 0;
-      UART3_Rx_flg = 0;
-      /* 重新启动中断接收 */
-      HAL_UART_Receive_IT(&huart3, UART3_temp, 1);
-    }
   }
   /* USER CODE END 3 */
 }
@@ -1551,32 +1018,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
   if (htim->Instance == TIM3)
   {
-    // Key_Scan();        // 持续检测按键状态
-    // keyPressTime += 1; // 增加计数值
-    // switch (keyState)
-    // {
-    // case LONG_PRESS_START:
-    //   if (keyPressTime >= 3000) // 3秒
-    //   {
-    //     if (runState == TURN_ON) // 如果是开机状态，则执行关机操作
-    //     {
-    //       HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin | PWR_5V_EN_Pin, GPIO_PIN_RESET); // 关闭PC4和PC5
-    //       runState = TURN_OFF;
-    //       keyState = IDLE;
-    //     }
-    //     else // 首次长按，开机操作
-    //     {
-    //       HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin | PWR_5V_EN_Pin, GPIO_PIN_SET); // 开启PC4和PC5
-    //       runState = TURN_ON;
-    //       keyState = IDLE;
-    //     }
-    //     keyPressTime = 0; // 重置计时
-    //   }
-    //   break;
-    // default:
-    //   break;
-    // }
-
     tm3_count++;
     if (tm3_count >= 1000)
       tm3_count = 0;
@@ -1649,62 +1090,24 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
   }
 
-  // if (htim->Instance == TIM4)
-  // {
-  //   // check the setting of the pwm signal
-  //   tm4_count++;
-  //   uint16_t pin;
-  //   GPIO_TypeDef *port;
-  //   if (tm4_count >= 100)
-  //     tm4_count = 0;
-  //   if (tm4_count == 0)
-  //   {
-  //     /* code */
-  //     for (int i = 0; i < 8; i++)
-  //     {
-  //       Motor_DataDef md = motor_pwm[i];
-  //       if (md.pwm > 0)
-  //       {
-  //         pin = md.dir == 0 ? md.GPIO_Pin1 : md.GPIO_Pin2;
-  //         port = md.dir == 0 ? md.GPIOx1 : md.GPIOx2;
-  //         HAL_GPIO_WritePin(port, pin, GPIO_PIN_SET);
-  //         // port->ODR |=  pin;
-  //       }
-  //     }
-  //   }
-  //   else
-  //   {
-  //     for (int i = 0; i < 8; i++)
-  //     {
-  //       Motor_DataDef md = motor_pwm[i];
-  //       if (tm4_count == md.pwm)
-  //       {
-  //         pin = md.dir == 0 ? md.GPIO_Pin1 : md.GPIO_Pin2;
-  //         port = md.dir == 0 ? md.GPIOx1 : md.GPIOx2;
-  //         HAL_GPIO_WritePin(port, pin, GPIO_PIN_RESET);
-  //         // port->ODR &= ~pin;
-  //       }
-  //     }
-  //   }
-  // }
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART1) /* 检查是否是USART1的回调 */
   {
-    rs485_receive_input(UART1_temp[0]);
-    HAL_UART_Receive_IT(&huart1, UART1_temp, 1);
+    // rs485_receive_input(UART1_temp[0]);
+    // HAL_UART_Receive_IT(&huart1, UART1_temp, 1);
   }
 
   if (huart->Instance == USART3) /* 检查是否是USART3的回调 */
   {
-    if (sofar3 < RXBUFFERSIZE - 1)
-      buffer3[sofar3++] = UART3_temp[0];
-    if (0x0a == UART3_temp[0])
-      UART3_Rx_flg = 1;
-    else
-      HAL_UART_Receive_IT(&huart3, UART3_temp, 1);
+    // if (sofar3 < RXBUFFERSIZE - 1)
+    //   buffer3[sofar3++] = UART3_temp[0];
+    // if (0x0a == UART3_temp[0])
+    //   UART3_Rx_flg = 1;
+    // else
+    //   HAL_UART_Receive_IT(&huart3, UART3_temp, 1);
   }
 }
 
@@ -2038,25 +1441,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
   if (GPIO_Pin == INT_Pin)
   {
-    // printf("INT_Pin\n");
-    // HAL_GPIO_TogglePin(GPIOB, LED_Pin);
-    // HAL_GPIO_TogglePin(BEEPER_GPIO_Port, BEEPER_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_0_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_0_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_1_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_1_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_2_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_2_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_3_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_3_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_4_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_4_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_5_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_5_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_6_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_6_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN1_7_Pin);
-    // HAL_GPIO_TogglePin(GPIOA, MOTOR_IN2_7_Pin);
   }
 }
 

@@ -3,6 +3,7 @@
 "can_tutor\main.o"
 "can_tutor\stm32f1xx_it.o"
 "can_tutor\stm32f1xx_hal_msp.o"
+"can_tutor\leaf_ota.o"
 "can_tutor\stm32f1xx_hal_gpio_ex.o"
 "can_tutor\stm32f1xx_hal_adc.o"
 "can_tutor\stm32f1xx_hal_adc_ex.o"
