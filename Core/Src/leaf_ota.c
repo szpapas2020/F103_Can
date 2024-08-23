@@ -77,7 +77,7 @@ void write_boot_config(void)
     STMFLASH_Write(FLASH_USER_START_ADDR, (uint32_t *) &dev.serial_no, sizeof(dev) / 4);
 }
 
-// Erase flash，24K
+// Erase flash，22K
 void Erase_page(uint32_t addr)
 {
   FLASH_EraseInitTypeDef EraseInitStruct;
@@ -85,7 +85,7 @@ void Erase_page(uint32_t addr)
 
   EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES;
   EraseInitStruct.PageAddress = addr;
-  EraseInitStruct.NbPages = 24;
+  EraseInitStruct.NbPages = 22;
 
   HAL_FLASH_Unlock();
   HAL_FLASHEx_Erase(&EraseInitStruct, &PageError);

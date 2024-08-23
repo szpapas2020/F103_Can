@@ -17,7 +17,7 @@ typedef struct
   uint32_t serial_no;
   uint32_t can_server_id;
   uint16_t version;
-  uint16_t padding;
+  uint16_t charge_flag;
   uint32_t backup_flag;
 } dev_info;
 

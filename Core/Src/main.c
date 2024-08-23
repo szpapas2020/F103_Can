@@ -60,6 +60,8 @@
 
 #define CMD_TURN_ON 0xB1
 #define CMD_TURN_OFF 0xB2
+#define CMD_TURN_ON_5V 0xB3
+#define CMD_TURN_OFF_5V 0xB4
 
 #define CMD_OTA_VERSION 0xC0
 #define CMD_OTA_REQUEST 0xC1
@@ -174,6 +176,9 @@ uint8_t bTimer1S = 0;
 
 // 4s timer
 uint8_t bTimer4S = 0;
+
+uint8_t bAlarm = 0;
+uint8_t alarm_count = 0;
 
 /* USER CODE END PV */
 
@@ -351,6 +356,25 @@ void dump_data(void)
 }
 
 
+uint8_t convert_vol(uint16_t adc, float scale)
+{
+  float voltage = adc / 4096 * 3.4 * 16;
+  printf("ADC = %d, Voltage = %f \r\n", adc, voltage);
+  return (uint8_t) ((voltage - 25.0) / scale);
+}
+
+
+uint8_t convert_adc(uint16_t adc, float scale)
+{
+  float voltage = adc / 4096 * 3.4 * 1.36;
+  float current = (voltage - 2.5) / scale ; // 20A 量程
+
+  printf("ADC = %d, Voltage = %f Current = %f\r\n", adc, voltage, current);
+
+  return (uint8_t) (current / 0.2 + 128);
+}
+
+
 void can_process()
 {
   // printf("Receive CAN Succeed !\r\n");
@@ -359,7 +383,7 @@ void can_process()
 
   switch (RxBuf[0])
   {
-  case 0xA0: // OPEN DOOR
+  case CMD_OPEN_DOOR: // OPEN DOOR
     printf("Open Door !\r\n");
 
     // 从data最低位开始，如果这位的数值是1，就打开对应的门
@@ -373,7 +397,7 @@ void can_process()
     }
 
     // Send ACK
-    TxBuf[0] = 0xA0;
+    TxBuf[0] = CMD_OPEN_DOOR;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
 
@@ -394,7 +418,7 @@ void can_process()
     }
 
     // Send ACK
-    TxBuf[0] = 0xA1;
+    TxBuf[0] = CMD_CLOSE_DOOR;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
 
@@ -403,7 +427,18 @@ void can_process()
   case CMD_ALARM:
     printf("Alarm !\r\n");
 
-    TxBuf[0] = 0xA2;
+    if (RxBuf[1] == 0x0) {
+      printf("Alarm Off !\r\n");
+      bAlarm = 0;
+      HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_SET);
+    } else {
+      bAlarm = 1;
+      alarm_count = RxBuf[1];
+      HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_RESET);
+      printf("Alarm On !\r\n");
+    }
+
+    TxBuf[0] = CMD_ALARM;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
 
@@ -421,24 +456,22 @@ void can_process()
     ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
 
     // 门状态
-    TxBuf[0] = 0xA3;
+    TxBuf[0] = CMD_GET_DOOR_STATE;
     TxBuf[1] = get_door_state();
-    TxBuf[2] = ADC_Values[0];
     // 电量  ADC_Values[0]
-    TxBuf[2] = 0x64; // 100%
-    // 电流  ADC_Values[1]
-    TxBuf[3] = 0x22; // 100%
-    // 12V电流  ADC_Values[2]
-    TxBuf[4] = 0x22; // 100%
-    // VM电流  ADC_Values[3]
-    TxBuf[5] = 0x22; // 100%
-    // 充电电流  ADC_Values[4]
-    TxBuf[6] = 0x22; // 100%
+    TxBuf[2] = convert_vol(ADC_Values[0], 0.05);
+    // 电流     ADC_Values[1]
+    TxBuf[3] = convert_adc(ADC_Values[1], 0.067);
+    // 12V电流   ADC_Values[2]
+    TxBuf[4] = convert_adc(ADC_Values[2], 0.1);
+    // VM电流    ADC_Values[3]
+    TxBuf[5] = convert_adc(ADC_Values[3], 0.1);
+    // 这个从配置中获取
+    TxBuf[6] = dev.charge_flag & 0xFF;
     // 故障码
     TxBuf[7] = 0x00;
 
     Tx_Flag = CAN_Send_Msg(TxBuf, 8);
-
     break;
 
   case CMD_TURN_ON:
@@ -446,7 +479,7 @@ void can_process()
     // enable PWR_12V_EN_Pin
     HAL_GPIO_WritePin(PWR_12V_EN_GPIO_Port, PWR_12V_EN_Pin, GPIO_PIN_SET);
     // Send ACK
-    TxBuf[0] = 0xA4;
+    TxBuf[0] = CMD_TURN_ON;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
 
@@ -457,7 +490,30 @@ void can_process()
     bPowerOff = 1;
     bPowerOff_count = 12;
     // Send ACK
-    TxBuf[0] = 0xA5;
+    TxBuf[0] = CMD_TURN_OFF;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  case CMD_TURN_ON_5V:
+    printf("Turn On 5V !\r\n");
+    // enable PWR_5V_EN_Pin
+    HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_SET);
+    // Send ACK
+    TxBuf[0] = CMD_TURN_ON_5V;
+    TxBuf[1] = 0x10;
+    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+    break;
+
+  case CMD_TURN_OFF_5V:
+    printf("Turn Off 5V !\r\n");
+
+    // enable PWR_5V_EN_Pin
+    HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_RESET);
+    // Send ACK
+    TxBuf[0] = CMD_TURN_OFF_5V;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
 
@@ -551,14 +607,21 @@ void can_process()
     printf("OTA Reset !\r\n");
 
     dev.backup_flag = Startup_Update;
-    write_boot_config();
+    version = (RxBuf[1] << 8) | RxBuf[2];
+    dev.version = version;
 
+    write_boot_config();
     printf("BOOT FLAG Writed !\r\n");
 
     TxBuf[0] = CMD_OTA_RESET;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
-    break;
+
+	  // restart the system
+    HAL_NVIC_SystemReset();
+
+	  break;
+
 
   default:
     break;
@@ -578,7 +641,7 @@ void can_process()
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-
+  SCB->VTOR = 0x8004000U;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -1282,6 +1345,17 @@ void timer1s(void)
       bPowerOff = 0;
     }
   }
+
+  // Alarm
+  if (bAlarm == 1)
+  {
+    alarm_count--;
+    if (alarm_count == 0)
+    {
+      HAL_GPIO_WritePin(BEEPER_GPIO_Port, BEEPER_Pin, GPIO_PIN_SET);
+      bAlarm = 0;
+    }
+  }
 }
 
 int send_cmd(uint8_t *cmd, uint8_t len)
@@ -1360,14 +1434,26 @@ void CAN_Filter_Init(void)
   CAN_TxExtId = (CPU_ID[0] + CPU_ID[0] + CPU_ID[0]) & 0x1FFFFFFF; // 获取设备ID
   printf("CAN_TxExtId: %x\n", CAN_TxExtId);
 
-
   // Read boot config
   read_boot_config();
 
   if (dev.version != 0 && dev.version != 0xffff)
   {
     version = dev.version;
+  } else {
+    dev.version = 0x0100;
+    dev.backup_flag = 0xFFFFFFF;   //Start Normal
+    dev.charge_flag = 0;
+    dev.serial_no = 0x12345678;
+    dev.can_server_id = 0x17532F75;
+    write_boot_config();
   }
+
+  printf("Device info version: %x\n", dev.version);
+  printf("Device info can_server_id: %x\n", dev.can_server_id);
+  printf("Device info serial_no: %x\n", dev.serial_no);
+  printf("Device info charge_flag: %x\n", dev.charge_flag);
+  printf("Device info backup_flag: %x\n", dev.backup_flag);
 
   CAN_FilterTypeDef sFilterConfig;
 
