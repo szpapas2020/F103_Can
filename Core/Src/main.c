@@ -67,12 +67,12 @@
 #define CMD_OTA_END 0xC3
 #define CMD_OTA_RESET 0xC4
 
-static uint8_t version[2] = {0x0, 0x1};
+static uint16_t version = 0x0100; // 1.0
 static uint16_t ota_file_size = 0;
 static uint8_t ota_file_crc = 0;
 static uint16_t firmwareSize = 0;
 static uint16_t firmwareBatch = 0;
-uint8_t firmwareBuffer[1024];
+uint8_t firmwareBuffer[1024+8];
 
 int bPowerOff = 0;
 int bPowerOff_count = 12;
@@ -235,28 +235,31 @@ unsigned char CheckSum(unsigned char *uBuff, unsigned char uBuffLen)
 
 unsigned char CheckSumFlash(uint32_t start_addr, uint16_t file_size)
 {
-  unsigned char i, uSum = 0;
+  unsigned char uSum = 0;
   uint16_t batch = 0;
+  uint16_t i = 0;
 
-  for (batch = 0; batch < file_size / 1024; batch++)
+  for (batch = 0; batch < file_size / 256; batch++)
   {
     // Read 1024 bytes from flash
-    STMFLASH_Read((start_addr + batch * 1024), (uint32_t *) &firmwareBuffer[0], 256);
-    for (i = 0; i < 1024; i++)
+    STMFLASH_Read((start_addr + batch * 256), (uint32_t *) &firmwareBuffer[0], 64);
+    for (i = 0; i < 256; i++)
     {
       uSum = uSum + firmwareBuffer[i];
     }
   }
 
   // read the remaining bytes
-  STMFLASH_Read((start_addr + batch * 1024), (uint32_t *) &firmwareBuffer[0], file_size % 1024);
+  STMFLASH_Read((start_addr + batch * 256), (uint32_t *) &firmwareBuffer[0], file_size % 256);
 
-  for (i = 0; i < file_size % 1024; i++)
+  for (i = 0; i < file_size % 256; i++)
   {
     uSum = uSum + firmwareBuffer[i];
   }
 
   uSum = (~uSum) + 1;
+
+  printf("CheckSum = %d\r\n", uSum);
   return uSum;
 }
 
@@ -313,9 +316,44 @@ unsigned char get_door_state(void)
 返回参数 : 无
 使用说明 : 在MCU串口接收函数中调用该函数,并将接收到的数据作为参数传入
 *****************************************************************************/
+
+void dump_data(void)
+{
+  uint32_t * temp;
+
+  temp = (uint32_t *) &firmwareBuffer[0];
+
+  // dump the flash data from APP_NEW_FW_START_ADR
+  for (int bank=0; bank < 1; bank++)
+  {
+    printf("Read Flash Data %x !\r\n", APP_NEW_FW_START_ADR + bank * 1024);
+
+    STMFLASH_Read((APP_NEW_FW_START_ADR + bank * 1024), temp, 256);
+    for (int i = 0; i < 256; i++)
+    {
+      printf("%08x ", temp[i]);
+    }
+    printf("\r\n");
+  }
+
+  for (int bank = 18; bank < 19; bank++)
+  {
+    printf("Read Flash Data %x !\r\n", APP_NEW_FW_START_ADR + bank * 1024);
+
+    STMFLASH_Read((APP_NEW_FW_START_ADR + bank * 1024), temp, 256);
+    for (int i = 0; i < 256; i++)
+    {
+      printf("%08x ", temp[i]);
+    }
+    printf("\r\n");
+  }
+
+}
+
+
 void can_process()
 {
-  printf("Receive CAN Succeed !\r\n");
+  // printf("Receive CAN Succeed !\r\n");
   unsigned char data = RxBuf[1];
   // uint16_t input;
 
@@ -427,10 +465,10 @@ void can_process()
 
   // OTA proces
   case CMD_OTA_VERSION:
-    printf("OTA Version !\r\n");
+    printf("OTA Version : %x !\r\n", version);
     TxBuf[0] = CMD_OTA_VERSION;
-    TxBuf[1] = version[0];
-    TxBuf[2] = version[1];
+    TxBuf[1] = (version & 0xFF00 ) >> 8;
+    TxBuf[2] = version & 0xFF;
     Tx_Flag = CAN_Send_Msg(TxBuf, 3);
     break;
 
@@ -441,9 +479,13 @@ void can_process()
 
     printf("OTA Request %d, %d !\r\n", ota_file_size, ota_file_crc);
 
-    TxBuf[0] = CMD_OTA_VERSION;
+    TxBuf[0] = CMD_OTA_REQUEST;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+	  Erase_page(APP_NEW_FW_START_ADR);
+    printf("Flash Erase Finished !\r\n");
+
     firmwareBatch = 0;
     firmwareSize = 0;
     break;
@@ -454,32 +496,37 @@ void can_process()
       firmwareBuffer[firmwareSize++] = RxData[i];
     }
 
-    if (firmwareSize >= 1024)
+    if (firmwareSize >= 256)
     {
       //Write firmwareBuffer to flash
-      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 1024), (uint32_t *) &firmwareBuffer[0], 256);
-      printf("OTA Data Receive %d !\r\n", firmwareBatch++);
+      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 256), (uint32_t *) &firmwareBuffer[0], 64);
+      printf("OTA Data Receive batch %d !\r\n", firmwareBatch++);
 
-      for (int i = 1024; i < firmwareSize; i++)
+      for (int i = 256; i < firmwareSize; i++)
       {
-        firmwareBuffer[i-1024] = firmwareBuffer[i];
+        firmwareBuffer[i-256] = firmwareBuffer[i];
       }
-      firmwareSize -= 1024;
-    }
+      firmwareSize -= 256;
 
-    if (firmwareSize + 1024 * firmwareBatch >= ota_file_size)
-    {
-      //Write firmwareBuffer to flash
-      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 1024), (uint32_t *) &firmwareBuffer[0], firmwareSize/4);
-      printf("OTA Data Receive Finished!\r\n");
       TxBuf[0] = CMD_OTA_DATA;
       TxBuf[1] = 0x10;
       Tx_Flag = CAN_Send_Msg(TxBuf, 2);
     }
+
+    if (firmwareSize + 256 * firmwareBatch >= ota_file_size)
+    {
+      //Write firmwareBuffer to flash
+      STMFLASH_Write((APP_NEW_FW_START_ADR + firmwareBatch * 256), (uint32_t *) &firmwareBuffer[0], firmwareSize/4);
+      printf("Success:  OTA Data Receive Finished! Remain = %d \r\n", firmwareSize);
+      TxBuf[0] = CMD_OTA_DATA;
+      TxBuf[1] = 0x11;
+      Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+    }
+
     break;
 
   case CMD_OTA_END:
-    printf("OTA End !\r\n");
+    printf("OTA End, remain firmwareSize = %d, total_size = %d, crc = %d !\r\n", firmwareSize, ota_file_size, ota_file_crc);
 
     // check the CRC of the firmware
     if (ota_file_crc == CheckSumFlash(APP_NEW_FW_START_ADR, ota_file_size))
@@ -497,10 +544,17 @@ void can_process()
       TxBuf[1] = 0x61;
       Tx_Flag = CAN_Send_Msg(TxBuf, 2);
     }
+
     break;
 
   case CMD_OTA_RESET:
     printf("OTA Reset !\r\n");
+
+    dev.backup_flag = Startup_Update;
+    write_boot_config();
+
+    printf("BOOT FLAG Writed !\r\n");
+
     TxBuf[0] = CMD_OTA_RESET;
     TxBuf[1] = 0x10;
     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
@@ -555,6 +609,11 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   CAN_Filter_Init();
+
+  // do some test here
+
+  // end of test
+
   printf("Program Started !\r\n");
 
   HAL_TIM_Base_Start_IT(&htim3);
@@ -590,6 +649,13 @@ int main(void)
     {
       can_process();
       Rx_Flag = 0; // 标志位置0，等待下一次中断
+    }
+
+    // ADC
+    if (bSendAdc)
+    {
+      Send_ADC();
+      bSendAdc = 0;
     }
 
   }
@@ -1200,6 +1266,8 @@ void timer1s(void)
     ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
     ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
 
+    // printf("ADC Values: %d, %d, %d, %d, %d\r\n", ADC_Values[0], ADC_Values[1], ADC_Values[2], ADC_Values[3], ADC_Values[4]);
+
     bSendAdc = 0;
     time1s_count = 0;
   }
@@ -1291,6 +1359,15 @@ void CAN_Filter_Init(void)
 
   CAN_TxExtId = (CPU_ID[0] + CPU_ID[0] + CPU_ID[0]) & 0x1FFFFFFF; // 获取设备ID
   printf("CAN_TxExtId: %x\n", CAN_TxExtId);
+
+
+  // Read boot config
+  read_boot_config();
+
+  if (dev.version != 0 && dev.version != 0xffff)
+  {
+    version = dev.version;
+  }
 
   CAN_FilterTypeDef sFilterConfig;
 
