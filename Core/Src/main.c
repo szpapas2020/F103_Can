@@ -628,7 +628,8 @@ void can_process()
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  // SCB->VTOR = 0x8004000U;
+	__set_PRIMASK(0);   //  打开全局中断
+  SCB->VTOR = 0x8004000U;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -1307,7 +1308,7 @@ void timer1s(void)
 
   time1s_count++;
 
-  if (time1s_count == 1)
+  if (time1s_count == 5)
   {
     bSendAdc = 1;
     time1s_count = 0;
@@ -1554,9 +1555,6 @@ void Send_TCA(void)
 
 void Report_State(void)
 {
-
-  printf("Report State\r\n");
-
   ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
   ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
   ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
