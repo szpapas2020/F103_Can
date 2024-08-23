@@ -60,8 +60,6 @@
 
 #define CMD_TURN_ON 0xB1
 #define CMD_TURN_OFF 0xB2
-#define CMD_TURN_ON_5V 0xB3
-#define CMD_TURN_OFF_5V 0xB4
 
 #define CMD_OTA_VERSION 0xC0
 #define CMD_OTA_REQUEST 0xC1
@@ -76,8 +74,14 @@ static uint16_t firmwareSize = 0;
 static uint16_t firmwareBatch = 0;
 uint8_t firmwareBuffer[1024+8];
 
+static int bOTA = 0;
+
 int bPowerOff = 0;
 int bPowerOff_count = 12;
+
+
+int bTurnOff = 0;
+int bTurnOff_count = 60;
 
 /* USER CODE END PD */
 
@@ -212,6 +216,8 @@ void Send_ADC(void);
 
 int send_cmd(uint8_t *cmd, uint8_t len);
 
+void Report_State(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -264,7 +270,6 @@ unsigned char CheckSumFlash(uint32_t start_addr, uint16_t file_size)
 
   uSum = (~uSum) + 1;
 
-  printf("CheckSum = %d\r\n", uSum);
   return uSum;
 }
 
@@ -358,18 +363,18 @@ void dump_data(void)
 
 uint8_t convert_vol(uint16_t adc, float scale)
 {
-  float voltage = adc / 4096 * 3.4 * 16;
-  printf("ADC = %d, Voltage = %f \r\n", adc, voltage);
+  float voltage = adc / 4096.0 * 3.4 * 16;
+  // printf("ADC = %d, Voltage = %f \r\n", adc, voltage);
   return (uint8_t) ((voltage - 25.0) / scale);
 }
 
 
 uint8_t convert_adc(uint16_t adc, float scale)
 {
-  float voltage = adc / 4096 * 3.4 * 1.36;
+  float voltage = adc / 4096.0 * 3.4 * 1.36;
   float current = (voltage - 2.5) / scale ; // 20A 量程
 
-  printf("ADC = %d, Voltage = %f Current = %f\r\n", adc, voltage, current);
+  // printf("ADC = %d, Voltage = %f Current = %f\r\n", adc, voltage, current);
 
   return (uint8_t) (current / 0.2 + 128);
 }
@@ -496,29 +501,6 @@ void can_process()
 
     break;
 
-  case CMD_TURN_ON_5V:
-    printf("Turn On 5V !\r\n");
-    // enable PWR_5V_EN_Pin
-    HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_SET);
-    // Send ACK
-    TxBuf[0] = CMD_TURN_ON_5V;
-    TxBuf[1] = 0x10;
-    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
-
-    break;
-
-  case CMD_TURN_OFF_5V:
-    printf("Turn Off 5V !\r\n");
-
-    // enable PWR_5V_EN_Pin
-    HAL_GPIO_WritePin(PWR_5V_EN_GPIO_Port, PWR_5V_EN_Pin, GPIO_PIN_RESET);
-    // Send ACK
-    TxBuf[0] = CMD_TURN_OFF_5V;
-    TxBuf[1] = 0x10;
-    Tx_Flag = CAN_Send_Msg(TxBuf, 2);
-
-    break;
-
   // OTA proces
   case CMD_OTA_VERSION:
     printf("OTA Version : %x !\r\n", version);
@@ -544,6 +526,7 @@ void can_process()
 
     firmwareBatch = 0;
     firmwareSize = 0;
+    bOTA = 1;
     break;
 
   case CMD_OTA_DATA:
@@ -577,6 +560,8 @@ void can_process()
       TxBuf[0] = CMD_OTA_DATA;
       TxBuf[1] = 0x11;
       Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+
+      bOTA = 0;
     }
 
     break;
@@ -600,6 +585,8 @@ void can_process()
       TxBuf[1] = 0x61;
       Tx_Flag = CAN_Send_Msg(TxBuf, 2);
     }
+
+    bOTA = 0;
 
     break;
 
@@ -641,7 +628,7 @@ void can_process()
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  SCB->VTOR = 0x8004000U;
+  // SCB->VTOR = 0x8004000U;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -715,9 +702,9 @@ int main(void)
     }
 
     // ADC
-    if (bSendAdc)
+    if (bSendAdc && bOTA == 0)
     {
-      Send_ADC();
+      Report_State();
       bSendAdc = 0;
     }
 
@@ -1320,18 +1307,9 @@ void timer1s(void)
 
   time1s_count++;
 
-  if (time1s_count == 10)
+  if (time1s_count == 1)
   {
-    // 读取ADC的值
-    ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
-    ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
-    ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
-    ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
-    ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
-
-    // printf("ADC Values: %d, %d, %d, %d, %d\r\n", ADC_Values[0], ADC_Values[1], ADC_Values[2], ADC_Values[3], ADC_Values[4]);
-
-    bSendAdc = 0;
+    bSendAdc = 1;
     time1s_count = 0;
   }
 
@@ -1356,6 +1334,24 @@ void timer1s(void)
       bAlarm = 0;
     }
   }
+
+  // bTurnOff
+  // if (bTurnOff)
+  // {
+  //   if (bTurnOff_count == 0)
+  //   {
+  //     printf(" Send Turn off cmd !\r\n");
+  //     bTurnOff = 0;
+  //     TxBuf[0] = CMD_TURN_OFF;
+  //     TxBuf[1] = 0xFF;
+  //     Tx_Flag = CAN_Send_Msg(TxBuf, 2);
+  //   }
+  //   else
+  //   {
+  //     bTurnOff_count--;
+  //   }
+  // }
+
 }
 
 int send_cmd(uint8_t *cmd, uint8_t len)
@@ -1429,10 +1425,8 @@ void CAN_Filter_Init(void)
   CPU_ID[0] = HAL_GetUIDw0();
   CPU_ID[1] = HAL_GetUIDw1();
   CPU_ID[2] = HAL_GetUIDw2();
-  // printf("CPU_ID: %x %x %x\n", CPU_ID[0], CPU_ID[1], CPU_ID[2]);
 
   CAN_TxExtId = (CPU_ID[0] + CPU_ID[0] + CPU_ID[0]) & 0x1FFFFFFF; // 获取设备ID
-  printf("CAN_TxExtId: %x\n", CAN_TxExtId);
 
   // Read boot config
   read_boot_config();
@@ -1449,11 +1443,7 @@ void CAN_Filter_Init(void)
     write_boot_config();
   }
 
-  printf("Device info version: %x\n", dev.version);
-  printf("Device info can_server_id: %x\n", dev.can_server_id);
-  printf("Device info serial_no: %x\n", dev.serial_no);
-  printf("Device info charge_flag: %x\n", dev.charge_flag);
-  printf("Device info backup_flag: %x\n", dev.backup_flag);
+  printf("Device info: CAN_TxExtId: %x, version: %x, can_server_id: %x, serial_no: %x, charge_flag: %x, backup_flag: %x\n", CAN_TxExtId,  dev.version, dev.can_server_id, dev.serial_no, dev.charge_flag, dev.backup_flag);
 
   CAN_FilterTypeDef sFilterConfig;
 
@@ -1562,37 +1552,34 @@ void Send_TCA(void)
   bSendTCA = 0;
 }
 
-void Send_ADC(void)
+void Report_State(void)
 {
-  // send the adc data to CAN
-  TxBuf[0] = 0xAC;
-  TxBuf[1] = ADC_Values[0] & 0xFF;
-  TxBuf[2] = ADC_Values[0] >> 8;
-  TxBuf[3] = ADC_Values[1] & 0xFF;
-  TxBuf[4] = ADC_Values[1] >> 8;
-  TxBuf[5] = ADC_Values[2] & 0xFF;
-  TxBuf[6] = ADC_Values[2] >> 8;
-  Tx_Flag = CAN_Send_Msg(TxBuf, 7); // 发送数据，根据返回值判定发送是否异常
-                                    // if (Tx_Flag)
-                                    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-                                    // else
-  printf("Send ADC(0-2) completed !\r\n");
 
-  // 清空接收、发送数组，保留Rxbuf内容
-  memset(TxBuf, 0, sizeof(TxBuf));
+  printf("Report State\r\n");
 
-  TxBuf[0] = 0xAD;
-  TxBuf[1] = ADC_Values[3] & 0xFF;
-  TxBuf[2] = ADC_Values[3] >> 8;
-  TxBuf[3] = ADC_Values[4] & 0xFF;
-  TxBuf[4] = ADC_Values[4] >> 8;
-  Tx_Flag = CAN_Send_Msg(TxBuf, 5); // 发送数据，根据返回值判定发送是否异常
-                                    // if (Tx_Flag)
-                                    //   printf("Send failed ,please check your data !\r\n"); // 返回1代表数据发送异常
-                                    // else
-  printf("Send ADC(3-4) completed !\r\n");
-  // 清空接收、发送数组，保留Rxbuf内容
-  memset(TxBuf, 0, sizeof(TxBuf));
+  ADC_Values[0] = ADC_Read(ADC_CHANNEL_10); // ADC SYSTEM VOLTAGE
+  ADC_Values[1] = ADC_Read(ADC_CHANNEL_11); // ADC SYSTEM CURRENT
+  ADC_Values[2] = ADC_Read(ADC_CHANNEL_12); // ADC 12V CURRENT
+  ADC_Values[3] = ADC_Read(ADC_CHANNEL_13); // ADC VM CURRENT
+  ADC_Values[4] = ADC_Read(ADC_CHANNEL_8);  // ADC VBAT CHARGE CURRENT
+
+  // 门状态
+  TxBuf[0] = CMD_GET_DOOR_STATE;
+  TxBuf[1] = get_door_state();
+  // 电量  ADC_Values[0]
+  TxBuf[2] = convert_vol(ADC_Values[0], 0.05);
+  // 电流     ADC_Values[1]
+  TxBuf[3] = convert_adc(ADC_Values[1], 0.067);
+  // 12V电流   ADC_Values[2]
+  TxBuf[4] = convert_adc(ADC_Values[2], 0.1);
+  // VM电流    ADC_Values[3]
+  TxBuf[5] = convert_adc(ADC_Values[3], 0.1);
+  // 这个从配置中获取
+  TxBuf[6] = dev.charge_flag & 0xFF;
+  // 故障码
+  TxBuf[7] = 0x00;
+
+  Tx_Flag = CAN_Send_Msg(TxBuf, 8);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
