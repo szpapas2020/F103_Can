@@ -41,12 +41,14 @@ extern dev_info dev;
 #define APP_NEW_FW_END_ADR (0x08010000 - 1)
 #define APP_NEW_FW_MAX_SIZE (APP_NEW_FW_END_ADR - APP_NEW_FW_START_ADR) // 256K
 
-
+void Start_BootLoader(void);
 void STMFLASH_Read(uint32_t ReadAddr, uint32_t *pBuffer, uint32_t NumToRead);
 void STMFLASH_Write(uint32_t WriteAddr, uint32_t *pBuffer, uint32_t NumToWrite);
 void read_boot_config(void);
 void write_boot_config(void);
 void Erase_page(uint32_t addr);
 void Erase_Config(void);
+uint32_t Check_Start_Mode(void);
+void CopyApp(uint32_t src_addr, uint32_t dest_addr, unsigned int byte_size);
 
 #endif

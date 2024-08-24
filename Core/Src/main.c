@@ -1437,7 +1437,7 @@ void CAN_Filter_Init(void)
     version = dev.version;
   } else {
     dev.version = 0x0100;
-    dev.backup_flag = 0xFFFFFFF;   //Start Normal
+    dev.backup_flag = 0xFFFFFFFF;   //Start Normal
     dev.charge_flag = 0;
     dev.serial_no = 0x12345678;
     dev.can_server_id = 0x17532F75;
